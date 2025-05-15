@@ -7,17 +7,18 @@ import sys
 import re
 import socket
 import webbrowser
+from datetime import datetime
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox, PhotoImage
-
 
 REPO_URL = "git@github.com:hihabib/Course-Platform.git"
 REPO_DIR = "Course-Platform"
 COURSES_DIR = os.path.join(REPO_DIR, "public", "courses")
 DEV_COMMAND = ["pnpm", "dev"]
 IS_WINDOWS = sys.platform.startswith("win")
-
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
 
 def get_local_ip():
     try:
@@ -28,7 +29,6 @@ def get_local_ip():
         return ip
     except:
         return "127.0.0.1"
-
 
 class DevServerManager:
     def __init__(self):
@@ -46,6 +46,9 @@ class DevServerManager:
     def git_pull(self):
         subprocess.run("git pull", cwd=REPO_DIR, shell=True)
 
+    def node_sync(self):
+        subprocess.run("node sync.js", cwd=REPO_DIR, shell=True)
+
     def start_dev_server(self, update_status, on_started, on_url_found):
         def run():
             self.clone_repo()
@@ -54,6 +57,12 @@ class DevServerManager:
             update_status("Pulling latest changes...")
             self.git_pull()
             update_status("Starting dev server...")
+            update_status("Syncing node modules...")
+            self.node_sync()
+
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            log_file_path = os.path.join(LOG_DIR, f"dev-server-{timestamp}.log")
+            log_file = open(log_file_path, "w", encoding="utf-8")
 
             creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
             self.process = subprocess.Popen(
@@ -63,7 +72,8 @@ class DevServerManager:
                 stderr=subprocess.STDOUT,
                 shell=True,
                 creationflags=creation_flags,
-                text=True
+                text=True,
+                universal_newlines=True
             )
 
             on_started()
@@ -75,11 +85,17 @@ class DevServerManager:
 
                 for line in self.process.stdout:
                     clean_line = ansi_escape.sub('', line)
+                    log_file.write(clean_line)
+                    log_file.flush()
+
                     match = url_regex.search(clean_line)
                     if match:
                         url = match.group(0)
                         on_url_found(url)
                         break
+
+                self.process.wait()
+                log_file.close()
 
             self.stdout_thread = threading.Thread(target=monitor_output, daemon=True)
             self.stdout_thread.start()
@@ -100,7 +116,6 @@ class DevServerManager:
             update_status("Dev server stopped.")
             on_stopped()
 
-
 class DevServerUI:
     def __init__(self, root):
         self.manager = DevServerManager()
@@ -112,10 +127,8 @@ class DevServerUI:
         self.dev_server_url_local = ""
         self.dev_server_url_network = ""
 
-        # === Top Margin ===
         tb.Frame(root, height=40).pack()
 
-        # === Button Container ===
         self.button_container = tb.Frame(root)
         self.button_container.pack()
 
@@ -126,16 +139,13 @@ class DevServerUI:
         self.status_label = tb.Label(self.button_container, text="Status: Dev server stopped.", bootstyle="info", font=("Segoe UI", 9, "bold"))
         self.render_buttons(running=False)
 
-        # === Server URL Display Frame ===
         self.url_frame = tb.Frame(root)
 
-        # Icons
         try:
             self.copy_icon = PhotoImage(file="copy.png")
         except:
             self.copy_icon = None
 
-        # --- Local URL Row ---
         self.local_row = tb.Frame(self.url_frame)
         self.local_prefix = tb.Label(self.local_row, text="Local:   ", font=("Segoe UI", 10, "bold"))
         self.local_label = tb.Label(self.local_row, text="", bootstyle="danger", cursor="hand2", font=("Segoe UI", 10, "underline"))
@@ -146,7 +156,6 @@ class DevServerUI:
         self.copy_local_button.pack(side="left")
         self.local_row.pack(anchor="w", pady=2)
 
-        # --- Network URL Row ---
         self.network_row = tb.Frame(self.url_frame)
         self.network_prefix = tb.Label(self.network_row, text="Network:", font=("Segoe UI", 10, "bold"))
         self.network_label = tb.Label(self.network_row, text="", bootstyle="danger", cursor="hand2", font=("Segoe UI", 10, "underline"))
@@ -161,15 +170,6 @@ class DevServerUI:
         self.url_frame.pack_forget()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    def start_server(self):
-        self.start_button.config(state="disabled")
-        self.update_status("Starting...")
-        self.manager.start_dev_server(
-            update_status=self.update_status,
-            on_started=lambda: self.render_buttons(running=True),
-            on_url_found=self.show_server_urls
-        )
 
     def update_status(self, message):
         self.status_label.config(text=f"Status: {message}")
@@ -187,29 +187,21 @@ class DevServerUI:
         self.add_course_button.pack(pady=(5, 10))
         self.status_label.pack(pady=(0, 5))
 
-    def show_server_urls(self, url):
-        ip = get_local_ip()
-        self.dev_server_url_local = url
-        self.dev_server_url_network = url.replace("localhost", ip).replace("127.0.0.1", ip)
-
-        # Update labels
-        self.local_label.config(text=self.dev_server_url_local)
-        self.local_label.bind("<Button-1>", lambda e: webbrowser.open(self.dev_server_url_local))
-
-        self.network_label.config(text=self.dev_server_url_network)
-        self.network_label.bind("<Button-1>", lambda e: webbrowser.open(self.dev_server_url_network))
-
-        self.url_frame.pack()
-
-        # ✅ Auto-open in browser
-        webbrowser.open(self.dev_server_url_network)
+    def start_server(self):
+        self.start_button.config(state="disabled")
+        self.update_status("Starting...")
+        self.manager.start_dev_server(
+            update_status=self.update_status,
+            on_started=lambda: self.render_buttons(running=True),
+            on_url_found=self.show_server_urls
+        )
 
     def stop_server(self):
         self.manager.stop_dev_server(
             update_status=self.update_status,
             on_stopped=lambda: (
                 self.render_buttons(running=False),
-                self.url_frame.pack_forget()  # ✅ Hide the URL section
+                self.url_frame.pack_forget()
             )
         )
 
@@ -229,6 +221,7 @@ class DevServerUI:
         self.network_label.bind("<Button-1>", lambda e: webbrowser.open(self.dev_server_url_network))
 
         self.url_frame.pack()
+        webbrowser.open(self.dev_server_url_local)
 
     def copy_local_url(self):
         self.root.clipboard_clear()
@@ -265,8 +258,7 @@ class DevServerUI:
 
         threading.Thread(target=copy_course, daemon=True).start()
 
-
 if __name__ == "__main__":
-    app = tb.Window(themename="flatly")  # You can also try "superhero" for dark mode
+    app = tb.Window(themename="flatly")
     DevServerUI(app)
     app.mainloop()
