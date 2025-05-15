@@ -13,12 +13,12 @@ from ttkbootstrap.constants import *
 import tempfile
 from tkinter import filedialog, messagebox, PhotoImage
 
-
-TEMP_DIR = tempfile.gettempdir()
+TEMP_DIR = os.path.join(tempfile.gettempdir(), "course_platform_temp")
+os.makedirs(TEMP_DIR, exist_ok=True)
 REPO_DIR = os.path.join(TEMP_DIR, "Course-Platform")
 LOG_DIR = os.path.join(TEMP_DIR, "CoursePlatformLogs")
 os.makedirs(LOG_DIR, exist_ok=True)
-REPO_URL = "git@github.com:hihabib/Course-Platform.git"
+REPO_URL = "https://github.com/hihabib/Course-Platform.git"
 COURSES_DIR = os.path.join(REPO_DIR, "public", "courses")
 DEV_COMMAND = ["pnpm", "dev"]
 IS_WINDOWS = sys.platform.startswith("win")
@@ -38,70 +38,82 @@ class DevServerManager:
         self.process = None
         self.stdout_thread = None
 
-    def clone_repo(self):
+    def clone_repo(self, log_file):
         if not os.path.exists(REPO_DIR):
-            subprocess.run(["git", "clone", REPO_URL], shell=True)
+            subprocess.run(["git", "clone", REPO_URL, REPO_DIR], shell=True, stdout=log_file, stderr=log_file, check=True)
 
-    def install_dependencies(self):
-        subprocess.run("npm install -g pnpm", shell=True)
-        subprocess.run("pnpm install", cwd=REPO_DIR, shell=True)
+    def install_dependencies(self, log_file):
+        subprocess.run("npm install -g pnpm", shell=True, stdout=log_file, stderr=log_file, check=True)
+        subprocess.run("pnpm install", cwd=REPO_DIR, shell=True, stdout=log_file, stderr=log_file, check=True)
 
-    def git_pull(self):
-        subprocess.run("git pull", cwd=REPO_DIR, shell=True)
+    def git_pull(self, log_file):
+        subprocess.run("git pull", cwd=REPO_DIR, shell=True, stdout=log_file, stderr=log_file, check=True)
 
-    def node_sync(self):
-        subprocess.run("node sync.js", cwd=REPO_DIR, shell=True)
+    def node_sync(self, log_file):
+        subprocess.run("node sync.js", cwd=REPO_DIR, shell=True, stdout=log_file, stderr=log_file, check=True)
 
-    def start_dev_server(self, update_status, on_started, on_url_found):
+    def start_dev_server(self, update_status, on_started, on_url_found, reset_button):
         def run():
-            self.clone_repo()
-            update_status("Installing dependencies...")
-            self.install_dependencies()
-            update_status("Pulling latest changes...")
-            self.git_pull()
-            update_status("Starting server...")
-            update_status("Syncing node modules...")
-            self.node_sync()
-
             timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             log_file_path = os.path.join(LOG_DIR, f"dev-server-{timestamp}.log")
             log_file = open(log_file_path, "w", encoding="utf-8")
 
-            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
-            self.process = subprocess.Popen(
-                DEV_COMMAND,
-                cwd=REPO_DIR,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                shell=True,
-                creationflags=creation_flags,
-                text=True,
-                universal_newlines=True
-            )
+            try:
+                self.clone_repo(log_file)
+                update_status("Installing dependencies...")
+                self.install_dependencies(log_file)
+                update_status("Pulling latest changes...")
+                self.git_pull(log_file)
+                # ✅ Ensure the public/courses folder exists
+                if not os.path.exists(COURSES_DIR):
+                    os.makedirs(COURSES_DIR, exist_ok=True)
+                update_status("Syncing node modules...")
+                self.node_sync(log_file)
+                update_status("Starting server...")
 
-            on_started()
-            update_status("Server running.")
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
+                self.process = subprocess.Popen(
+                    DEV_COMMAND,
+                    cwd=REPO_DIR,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    shell=True,
+                    creationflags=creation_flags,
+                    text=True,
+                    universal_newlines=True
+                )
 
-            def monitor_output():
-                ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-                url_regex = re.compile(r"https?://[^\s]+")
+                on_started()
+                update_status("Server running.")
 
-                for line in self.process.stdout:
-                    clean_line = ansi_escape.sub('', line)
-                    log_file.write(clean_line)
-                    log_file.flush()
+                def monitor_output():
+                    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                    url_regex = re.compile(r"https?://[^\s]+")
 
-                    match = url_regex.search(clean_line)
-                    if match:
-                        url = match.group(0)
-                        on_url_found(url)
-                        break
+                    for line in self.process.stdout:
+                        clean_line = ansi_escape.sub('', line)
+                        log_file.write(clean_line)
+                        log_file.flush()
 
-                self.process.wait()
+                        match = url_regex.search(clean_line)
+                        if match:
+                            url = match.group(0)
+                            on_url_found(url)
+                            break
+
+                    self.process.wait()
+                    log_file.close()
+
+                self.stdout_thread = threading.Thread(target=monitor_output, daemon=True)
+                self.stdout_thread.start()
+
+            except subprocess.CalledProcessError as e:
+                error_message = f"Setup failed. See log:\n{log_file_path}"
+                update_status(error_message)
+                log_file.write(f"\nFAILED: {str(e)}\n")
                 log_file.close()
-
-            self.stdout_thread = threading.Thread(target=monitor_output, daemon=True)
-            self.stdout_thread.start()
+                reset_button()
+                messagebox.showerror("Setup Error", error_message)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -191,12 +203,15 @@ class DevServerUI:
         self.status_label.pack(pady=(0, 5))
 
     def start_server(self):
+        if self.manager.process:
+            return
         self.start_button.config(state="disabled")
         self.update_status("Starting...")
         self.manager.start_dev_server(
             update_status=self.update_status,
             on_started=lambda: self.render_buttons(running=True),
-            on_url_found=self.show_server_urls
+            on_url_found=self.show_server_urls,
+            reset_button=lambda: self.start_button.config(state="normal")
         )
 
     def stop_server(self):
