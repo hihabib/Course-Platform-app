@@ -10,15 +10,18 @@ import webbrowser
 from datetime import datetime
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
+import tempfile
 from tkinter import filedialog, messagebox, PhotoImage
 
+
+TEMP_DIR = tempfile.gettempdir()
+REPO_DIR = os.path.join(TEMP_DIR, "Course-Platform")
+LOG_DIR = os.path.join(TEMP_DIR, "CoursePlatformLogs")
+os.makedirs(LOG_DIR, exist_ok=True)
 REPO_URL = "git@github.com:hihabib/Course-Platform.git"
-REPO_DIR = "Course-Platform"
 COURSES_DIR = os.path.join(REPO_DIR, "public", "courses")
 DEV_COMMAND = ["pnpm", "dev"]
 IS_WINDOWS = sys.platform.startswith("win")
-LOG_DIR = "logs"
-os.makedirs(LOG_DIR, exist_ok=True)
 
 def get_local_ip():
     try:
@@ -56,7 +59,7 @@ class DevServerManager:
             self.install_dependencies()
             update_status("Pulling latest changes...")
             self.git_pull()
-            update_status("Starting dev server...")
+            update_status("Starting server...")
             update_status("Syncing node modules...")
             self.node_sync()
 
@@ -77,7 +80,7 @@ class DevServerManager:
             )
 
             on_started()
-            update_status("Dev server running.")
+            update_status("Server running.")
 
             def monitor_output():
                 ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -104,7 +107,7 @@ class DevServerManager:
 
     def stop_dev_server(self, update_status, on_stopped):
         if self.process:
-            update_status("Stopping dev server...")
+            update_status("Stopping server...")
             try:
                 if IS_WINDOWS:
                     self.process.send_signal(signal.CTRL_BREAK_EVENT)
@@ -113,14 +116,14 @@ class DevServerManager:
             except Exception:
                 self.process.kill()
             self.process = None
-            update_status("Dev server stopped.")
+            update_status("Server stopped.")
             on_stopped()
 
 class DevServerUI:
     def __init__(self, root):
         self.manager = DevServerManager()
         self.root = root
-        self.root.title("Dev Server Manager")
+        self.root.title("Course Platform")
         self.root.geometry("470x310")
         self.root.resizable(False, False)
 
@@ -132,11 +135,11 @@ class DevServerUI:
         self.button_container = tb.Frame(root)
         self.button_container.pack()
 
-        self.start_button = tb.Button(self.button_container, text="Start Dev Server", bootstyle="success", width=22, command=self.start_server)
-        self.stop_button = tb.Button(self.button_container, text="Stop Dev Server", bootstyle="danger", width=22, command=self.stop_server)
+        self.start_button = tb.Button(self.button_container, text="Start Server", bootstyle="success", width=22, command=self.start_server)
+        self.stop_button = tb.Button(self.button_container, text="Stop Server", bootstyle="danger", width=22, command=self.stop_server)
         self.add_course_button = tb.Button(self.button_container, text="Add Course", bootstyle="primary", width=22, command=self.add_course)
 
-        self.status_label = tb.Label(self.button_container, text="Status: Dev server stopped.", bootstyle="info", font=("Segoe UI", 9, "bold"))
+        self.status_label = tb.Label(self.button_container, text="Status: Server stopped.", bootstyle="info", font=("Segoe UI", 9, "bold"))
         self.render_buttons(running=False)
 
         self.url_frame = tb.Frame(root)

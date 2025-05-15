@@ -11,7 +11,7 @@ data_files = [
 
 # Build options
 build_args = [
-    "--name=DevServerManager",
+    "--name=Course Platform",
     "--onefile",
     "--noconsole",
 ]
